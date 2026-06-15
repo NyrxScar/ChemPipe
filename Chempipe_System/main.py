@@ -118,6 +118,34 @@ def get_history_details(analise_id: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/dashboard/stats")
+def get_dashboard_stats():
+    try:
+        stats = db.obter_estatisticas_dashboard()
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/dashboard/search")
+def search_compounds(q: str = ""):
+    try:
+        if not q or len(q.strip()) < 2:
+            return []
+        resultados = db.pesquisar_compostos_global(q.strip())
+        return resultados
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/dashboard/search-external")
+def search_external_compounds(q: str = ""):
+    try:
+        if not q or len(q.strip()) < 2:
+            return []
+        resultados = pl.buscar_compostos_externos(q.strip())
+        return resultados
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

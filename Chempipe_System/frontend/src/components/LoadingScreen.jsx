@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Loader2, Database, ShieldAlert, Cpu, Dna, FileText } from 'lucide-react';
+import { Cpu, Dna } from 'lucide-react';
 
 export default function LoadingScreen({ progress, currentCompound, completed, total }) {
   const [logs, setLogs] = useState([]);
@@ -7,28 +7,29 @@ export default function LoadingScreen({ progress, currentCompound, completed, to
   // Add the current compound to a scrolling terminal log
   useEffect(() => {
     if (currentCompound) {
-      setLogs((prev) => {
-        const timeString = new Date().toLocaleTimeString('pt-BR', {
-          hour12: false,
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        });
-        
-        // Prevent duplicate logs
-        if (prev.length > 0 && prev[0].compound === currentCompound) {
-          return prev;
-        }
+      const timer = setTimeout(() => {
+        setLogs((prev) => {
+          const timeString = new Date().toLocaleTimeString('pt-BR', {
+            hour12: false,
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          });
+          
+          if (prev.length > 0 && prev[0].compound === currentCompound) {
+            return prev;
+          }
 
-        const newLog = {
-          time: timeString,
-          compound: currentCompound,
-          id: Math.random().toString(),
-          type: Math.random() > 0.5 ? 'PUBCHEM' : Math.random() > 0.5 ? 'CHEBI' : 'KEGG'
-        };
-        // Keep the last 4 logs
-        return [newLog, ...prev].slice(0, 4);
-      });
+          const newLog = {
+            time: timeString,
+            compound: currentCompound,
+            id: Math.random().toString(),
+            type: Math.random() > 0.5 ? 'PUBCHEM' : Math.random() > 0.5 ? 'CHEBI' : 'KEGG'
+          };
+          return [newLog, ...prev].slice(0, 4);
+        });
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [currentCompound]);
 
