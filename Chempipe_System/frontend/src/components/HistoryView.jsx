@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Loader2, Server, DatabaseZap, TerminalSquare } from 'lucide-react';
+import { Loader2, Server, DatabaseZap, TerminalSquare, Activity } from 'lucide-react';
 
 export default function HistoryView({ onViewResults }) {
   const [history, setHistory] = useState([]);
@@ -8,27 +8,28 @@ export default function HistoryView({ onViewResults }) {
   const [error, setError] = useState('');
   const [loadingId, setLoadingId] = useState(null);
 
-  useEffect(() => {
-    fetchHistory();
-  }, []);
-
-  const fetchHistory = async () => {
+  async function fetchHistory() {
     try {
       const response = await axios.get('/api/history');
       setHistory(response.data);
-    } catch (err) {
+    } catch {
       setError('ERRO CRÍTICO: Falha de conexão com os servidores de log.');
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchHistory();
+  }, []);
 
   const handleLoadAnalysis = async (id) => {
     setLoadingId(id);
     try {
       const response = await axios.get(`/api/history/${id}`);
       onViewResults(response.data);
-    } catch (err) {
+    } catch {
       alert('Falha ao restaurar dados deste buffer.');
     } finally {
       setLoadingId(null);

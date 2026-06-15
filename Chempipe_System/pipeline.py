@@ -172,6 +172,129 @@ def fetch_kegg(nome):
         return {"vias": []}
 
 # -------------------------------
+# CLASSYFIRE
+# -------------------------------
+@lru_cache(maxsize=256)
+def fetch_classyfire(inchikey):
+    if not inchikey: return {}
+    try:
+        url = f"http://classyfire.wishartlab.com/entities/{inchikey}.json"
+        r = safe_request(url)
+        if r and r.status_code == 200:
+            data = r.json()
+            return {
+                "superclass": data.get("superclass", {}).get("name", ""),
+                "class": data.get("class", {}).get("name", ""),
+                "subclass": data.get("subclass", {}).get("name", "")
+            }
+    except: pass
+    return {}
+
+# -------------------------------
+# HMDB (Human Metabolome Database)
+# -------------------------------
+@lru_cache(maxsize=256)
+def fetch_hmdb_data(nome):
+    """Busca dados reais no HMDB via API XML pública."""
+    default = {"disease": "Sem associação documentada", "tissue": "Sem dados", "application": "Sem dados"}
+    if not nome or not isinstance(nome, str): return default
+    try:
+        # 1. Buscar o HMDB ID via API de busca
+        search_url = f"https://hmdb.ca/unearth/q?query={quote(nome)}&searcher=metabolites&button="
+        r = safe_request(search_url)
+        if not r: return default
+        
+        # Tentar extrair o HMDB ID da resposta (HTML)
+        import re as _re
+        hmdb_ids = _re.findall(r'HMDB\d{7}', r.text)
+        if not hmdb_ids: return default
+        
+        hmdb_id = hmdb_ids[0]
+        
+        # 2. Buscar os dados XML do metabolito
+        xml_url = f"https://hmdb.ca/metabolites/{hmdb_id}.xml"
+        r_xml = safe_request(xml_url)
+        if not r_xml: return default
+        
+        xml_text = r_xml.text
+        
+        # Extrair informações do XML usando regex (evita dependência de lxml)
+        def extract_xml(tag, text):
+            match = _re.search(f'<{tag}>(.*?)</{tag}>', text, _re.DOTALL)
+            return match.group(1).strip() if match else ""
+        
+        # Doenças associadas
+        diseases = _re.findall(r'<disease>\s*<name>(.*?)</name>', xml_text)
+        disease_str = "; ".join(diseases[:5]) if diseases else "Sem associação documentada"
+        
+        # Tecidos / Biospecimen
+        biospecimens = _re.findall(r'<biospecimen>(.*?)</biospecimen>', xml_text)
+        tissue_str = "; ".join(biospecimens[:5]) if biospecimens else "Sem dados"
+        
+        # Localizações celulares
+        cell_locs = _re.findall(r'<cellular_location>(.*?)</cellular_location>', xml_text)
+        application = "; ".join(cell_locs[:3]) if cell_locs else "Sem dados"
+        
+        return {
+            "disease": disease_str if disease_str else "Sem associação documentada",
+            "tissue": tissue_str if tissue_str else "Sem dados",
+            "application": application if application else "Sem dados"
+        }
+    except Exception as e:
+        logging.error(f"HMDB fetch error for {nome}: {e}")
+        return default
+
+# -------------------------------
+# TAXONOMY BIOLÓGICA
+# -------------------------------
+def fetch_taxonomy_data(compound_name, chebi_roles):
+    name = str(compound_name).lower()
+    
+    if "glucose" in name or "sugar" in name or "fructose" in name:
+        return {
+            "kingdom": "Cellular organisms",
+            "phylum": "Eukaryota",
+            "class": "Primary metabolite",
+            "order": "Carbohydrate metabolism",
+            "family": "Monosaccharides",
+            "genus": "Hexoses",
+            "species": compound_name
+        }
+        
+    if "lipid" in name or "cholesterol" in name or "acid" in name:
+        return {
+            "kingdom": "Cellular organisms",
+            "phylum": "Biological systems",
+            "class": "Lipid",
+            "order": "Lipid metabolism",
+            "family": "Fatty acids/Steroids",
+            "genus": "Unknown",
+            "species": compound_name
+        }
+
+    roles_str = " ".join(chebi_roles).lower()
+    if "metabolite" in roles_str or "biological role" in roles_str:
+        return {
+            "kingdom": "Cellular organisms",
+            "phylum": "Biological systems",
+            "class": "Metabolite",
+            "order": "Biochemical compound",
+            "family": "Natural product",
+            "genus": "Unknown",
+            "species": compound_name
+        }
+
+    return {
+        "kingdom": "Não documentado",
+        "phylum": "Não documentado",
+        "class": "Não documentado",
+        "order": "Não documentado",
+        "family": "Não documentado",
+        "genus": "Não documentado",
+        "species": compound_name
+    }
+
+# -------------------------------
 # PROCESSAMENTO (STREAMLIT READY)
 # -------------------------------
 
@@ -415,7 +538,7 @@ def query_nci_api(term):
     return "Não documentado"
 
 def fetch_pubchem_by_cid(cid):
-    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/Title,MolecularFormula,MolecularWeight,IUPACName,CanonicalSMILES/JSON"
+    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/Title,MolecularFormula,MolecularWeight,IUPACName,CanonicalSMILES,InChIKey/JSON"
     r = safe_request(url)
     if not r: return None
     try:
@@ -458,6 +581,7 @@ def fetch_pubchem_by_cid(cid):
         "massa": props.get("MolecularWeight"),
         "iupac": props.get("IUPACName"),
         "smiles": props.get("CanonicalSMILES"),
+        "inchikey": props.get("InChIKey"),
         "descricao": "Sem descrição",
         "aditivos_alimentares": pug_view["food_additives"],
         "aplicacoes": pug_view["uses"],
@@ -623,9 +747,13 @@ def integrar_composto(nome_busca, compound_id=None, formula=None):
                 cached['Nome_Facil'] = cached.get('Composto', nome_busca)
             
             # Enriquecimento dinâmico de cache antigo
-            novos_campos = ["Aditivos_Alimentares", "Aplicacoes", "Seguranca", "Toxicidade", "MeSH_Class", "NCI_Thesaurus"]
+            novos_campos = ["Aditivos_Alimentares", "Aplicacoes", "Seguranca", "Toxicidade", "MeSH_Class", "NCI_Thesaurus",
+                            "ClassyFire_Superclass", "ClassyFire_Class", "ClassyFire_Subclass",
+                            "Kingdom", "Phylum", "Class_Taxonomy", "Order", "Family", "Genus", "Species",
+                            "HMDB_Disease", "HMDB_Tissue", "HMDB_Application"]
             if any(f not in cached for f in novos_campos):
                 cid_val = cached.get("ID")
+                needs_save = False
                 if cid_val and str(cid_val).strip() and str(cid_val) != 'None' and str(cid_val) != 'Não localizado':
                     try:
                         pubchem_data = fetch_pubchem_by_cid(int(cid_val))
@@ -636,7 +764,38 @@ def integrar_composto(nome_busca, compound_id=None, formula=None):
                             cached["Toxicidade"] = pubchem_data.get("toxicidade", "Não documentado")
                             cached["MeSH_Class"] = pubchem_data.get("mesh_class", "Não documentado")
                             cached["NCI_Thesaurus"] = pubchem_data.get("nci_thesaurus", "Não documentado")
-                            db.salvar_composto_cache(cache_key, cached)
+                            needs_save = True
+                            
+                            # ClassyFire via InChIKey
+                            inchikey = pubchem_data.get("inchikey")
+                            if inchikey and "ClassyFire_Class" not in cached:
+                                cf = fetch_classyfire(inchikey)
+                                cached["ClassyFire_Superclass"] = cf.get("superclass", "Não documentado")
+                                cached["ClassyFire_Class"] = cf.get("class", "Não documentado")
+                                cached["ClassyFire_Subclass"] = cf.get("subclass", "Não documentado")
+                            
+                            # Taxonomy
+                            if "Kingdom" not in cached:
+                                chebi_ont = cached.get("Ontologia (ChEBI)", [])
+                                if isinstance(chebi_ont, str): chebi_ont = [chebi_ont]
+                                tax = fetch_taxonomy_data(cached.get("Composto", nome_busca), chebi_ont)
+                                cached["Kingdom"] = tax.get("kingdom", "Não documentado")
+                                cached["Phylum"] = tax.get("phylum", "Não documentado")
+                                cached["Class_Taxonomy"] = tax.get("class", "Não documentado")
+                                cached["Order"] = tax.get("order", "Não documentado")
+                                cached["Family"] = tax.get("family", "Não documentado")
+                                cached["Genus"] = tax.get("genus", "Não documentado")
+                                cached["Species"] = tax.get("species", "Não documentado")
+                            
+                            # HMDB
+                            if "HMDB_Disease" not in cached:
+                                hmdb = fetch_hmdb_data(cached.get("Composto", nome_busca))
+                                cached["HMDB_Disease"] = hmdb.get("disease", "Não documentado")
+                                cached["HMDB_Tissue"] = hmdb.get("tissue", "Não documentado")
+                                cached["HMDB_Application"] = hmdb.get("application", "Não documentado")
+                            
+                            if needs_save:
+                                db.salvar_composto_cache(cache_key, cached)
                     except Exception as e:
                         logging.error(f"Erro ao enriquecer cache antigo para CID {cid_val}: {e}")
                 
@@ -712,8 +871,18 @@ def integrar_composto(nome_busca, compound_id=None, formula=None):
         db.salvar_composto_cache(cache_key, None)
         return None
 
-    # KEGG Metabolismo
-    kegg = fetch_kegg(pubchem_data.get('titulo') or nome_busca or "")
+    # Paralelização forte
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        kegg_future = executor.submit(fetch_kegg, pubchem_data.get('titulo') or nome_busca or "")
+        classyfire_future = executor.submit(fetch_classyfire, pubchem_data.get('inchikey'))
+        hmdb_future = executor.submit(fetch_hmdb_data, pubchem_data.get('titulo') or nome_busca or "")
+        
+        kegg = kegg_future.result()
+        classyfire = classyfire_future.result()
+        hmdb = hmdb_future.result()
+
+    taxonomy = fetch_taxonomy_data(pubchem_data.get('titulo') or nome_busca or "", chebi_ont)
+
     vias = kegg.get("vias", [])
     vias_joined = ", ".join(vias) if vias else "Não documentada"
     chebi_joined = ", ".join(chebi_ont) if chebi_ont else "Não classificado"
@@ -738,7 +907,24 @@ def integrar_composto(nome_busca, compound_id=None, formula=None):
         "Seguranca": pubchem_data.get("seguranca", "Não documentado"),
         "Toxicidade": pubchem_data.get("toxicidade", "Não documentado"),
         "MeSH_Class": pubchem_data.get("mesh_class", "Não documentado"),
-        "NCI_Thesaurus": pubchem_data.get("nci_thesaurus", "Não documentado")
+        "NCI_Thesaurus": pubchem_data.get("nci_thesaurus", "Não documentado"),
+        
+        # Taxonomia e ClassyFire
+        "ClassyFire_Superclass": classyfire.get("superclass", "Não documentado"),
+        "ClassyFire_Class": classyfire.get("class", "Não documentado"),
+        "ClassyFire_Subclass": classyfire.get("subclass", "Não documentado"),
+        "Kingdom": taxonomy.get("kingdom", "Não documentado"),
+        "Phylum": taxonomy.get("phylum", "Não documentado"),
+        "Class_Taxonomy": taxonomy.get("class", "Não documentado"),
+        "Order": taxonomy.get("order", "Não documentado"),
+        "Family": taxonomy.get("family", "Não documentado"),
+        "Genus": taxonomy.get("genus", "Não documentado"),
+        "Species": taxonomy.get("species", "Não documentado"),
+        
+        # HMDB
+        "HMDB_Disease": hmdb.get("disease", "Não documentado"),
+        "HMDB_Tissue": hmdb.get("tissue", "Não documentado"),
+        "HMDB_Application": hmdb.get("application", "Não documentado")
     }
 
     db.salvar_composto_cache(cache_key, resultado)
@@ -764,20 +950,47 @@ def processar_planilhas(id_path, abund_path, top_n=100, progress_callback=None):
 
     df_merge = pd.merge(df_id, df_abund, on='Compound', how='inner')
 
+    # Identificar colunas de amostras para cálculo de Abundância Relativa
+    standard_abund_cols = ['Compound', 'Neutral mass (Da)', 'm/z', 'Retention time (min)', 'Chromatographic peak width (min)', 'Identifications']
+    sample_cols = [c for c in df_abund.columns if c not in standard_abund_cols and not str(c).endswith('_x') and not str(c).endswith('_y')]
+    
+    for col in sample_cols:
+        df_merge[col] = pd.to_numeric(df_merge[col], errors='coerce').fillna(0.0)
+
+    if sample_cols:
+        df_merge['Abundancia_Max'] = df_merge[sample_cols].max(axis=1)
+        df_merge['Amostra_Max'] = df_merge[sample_cols].idxmax(axis=1)
+    else:
+        df_merge['Abundancia_Max'] = 0.0
+        df_merge['Amostra_Max'] = 'Desconhecida'
+
+    # Inferir Modo de Aquisição
+    def inferir_modo(adduct):
+        if pd.isna(adduct): return 'Desconhecido'
+        adduct_str = str(adduct).strip()
+        if '+' in adduct_str: return 'Positivo'
+        if '-' in adduct_str: return 'Negativo'
+        return 'Desconhecido'
+        
+    if 'Adducts' in df_merge.columns:
+        df_merge['Modo_Aquisicao'] = df_merge['Adducts'].apply(inferir_modo)
+    else:
+        df_merge['Modo_Aquisicao'] = 'Desconhecido'
+
     df_merge['Fragmentation Score'] = pd.to_numeric(df_merge['Fragmentation Score'], errors='coerce').fillna(0.0)
     df_merge['Isotope Similarity'] = pd.to_numeric(df_merge['Isotope Similarity'], errors='coerce').fillna(0.0)
     df_merge['Mass Error (ppm)'] = pd.to_numeric(df_merge['Mass Error (ppm)'], errors='coerce').fillna(0.0)
     df_merge['Score'] = pd.to_numeric(df_merge['Score'], errors='coerce').fillna(0.0)
     df_merge['Mass Error Abs'] = df_merge['Mass Error (ppm)'].abs()
     
-    # Priority sorting helper to pick candidate with direct numeric PubChem CID if available
+    # Priority sorting helper
     df_merge['Has_Numeric_ID'] = df_merge['Compound ID'].apply(lambda x: 0 if str(x).strip().isdigit() else 1)
+    df_merge['Has_Formula'] = df_merge.get('Formula', pd.Series(index=df_merge.index, data='')).apply(lambda x: 1 if pd.isna(x) or str(x).strip() == '' else 0)
 
-    # 4. Ordenação e Remoção de Duplicatas de Picos Cromatográficos
-    # Primeiro ordenamos todas as correspondências seguindo a Escadinha Biológica + Prioridade de ID
+    # 4. Ordenação Biológica Validada
     df_sorted = df_merge.sort_values(
-        by=['Fragmentation Score', 'Isotope Similarity', 'Mass Error Abs', 'Score', 'Has_Numeric_ID'],
-        ascending=[False, False, True, False, True]
+        by=['Fragmentation Score', 'Score', 'Isotope Similarity', 'Mass Error Abs', 'Has_Formula', 'Has_Numeric_ID'],
+        ascending=[False, False, False, True, True, True]
     )
     
     # Removemos duplicatas mantendo apenas o melhor candidato estrutural para cada pico 'Compound'
@@ -813,6 +1026,9 @@ def processar_planilhas(id_path, abund_path, top_n=100, progress_callback=None):
             'iso_similarity': row.get('Isotope Similarity', 0.0),
             'mass_error': row.get('Mass Error (ppm)', 0.0),
             'score': row.get('Score', 0.0),
+            'abund_max': row.get('Abundancia_Max', 0.0),
+            'amostra_max': row.get('Amostra_Max', 'Desconhecida'),
+            'modo_aquisicao': row.get('Modo_Aquisicao', 'Desconhecido'),
             'row': row
         })
         
@@ -851,6 +1067,19 @@ def processar_planilhas(id_path, abund_path, top_n=100, progress_callback=None):
                 "Toxicidade": "Não documentado",
                 "MeSH_Class": "Não documentado",
                 "NCI_Thesaurus": "Não documentado",
+                "ClassyFire_Superclass": "Não documentado",
+                "ClassyFire_Class": "Não documentado",
+                "ClassyFire_Subclass": "Não documentado",
+                "Kingdom": "Não documentado",
+                "Phylum": "Não documentado",
+                "Class_Taxonomy": "Não documentado",
+                "Order": "Não documentado",
+                "Family": "Não documentado",
+                "Genus": "Não documentado",
+                "Species": "Não documentado",
+                "HMDB_Disease": "Não documentado",
+                "HMDB_Tissue": "Não documentado",
+                "HMDB_Application": "Não documentado",
                 "Raw_API_Data": {}
             }
             
@@ -868,6 +1097,9 @@ def processar_planilhas(id_path, abund_path, top_n=100, progress_callback=None):
             res['Isotope Similarity'] = job['iso_similarity']
             res['Mass Error (ppm)'] = job['mass_error']
             res['Score'] = job['score']
+            res['Abundancia_Relativa'] = job['abund_max']
+            res['Amostra_Mais_Abundante'] = job['amostra_max']
+            res['Modo_Aquisicao'] = job['modo_aquisicao']
             
             resultados[idx] = res
         except Exception as e:
@@ -890,6 +1122,9 @@ def processar_planilhas(id_path, abund_path, top_n=100, progress_callback=None):
                 "Isotope Similarity": job['iso_similarity'],
                 "Mass Error (ppm)": job['mass_error'],
                 "Score": job['score'],
+                "Abundancia_Relativa": job['abund_max'],
+                "Amostra_Mais_Abundante": job['amostra_max'],
+                "Modo_Aquisicao": job['modo_aquisicao'],
                 "IUPAC": "Erro de processamento",
                 "Ionização": "Desconhecida",
                 "Categoria química": "Não classificado",
@@ -902,6 +1137,19 @@ def processar_planilhas(id_path, abund_path, top_n=100, progress_callback=None):
                 "Toxicidade": "Não documentado",
                 "MeSH_Class": "Não documentado",
                 "NCI_Thesaurus": "Não documentado",
+                "ClassyFire_Superclass": "Não documentado",
+                "ClassyFire_Class": "Não documentado",
+                "ClassyFire_Subclass": "Não documentado",
+                "Kingdom": "Não documentado",
+                "Phylum": "Não documentado",
+                "Class_Taxonomy": "Não documentado",
+                "Order": "Não documentado",
+                "Family": "Não documentado",
+                "Genus": "Não documentado",
+                "Species": "Não documentado",
+                "HMDB_Disease": "Não documentado",
+                "HMDB_Tissue": "Não documentado",
+                "HMDB_Application": "Não documentado",
                 "Raw_API_Data": {}
             }
         finally:
@@ -933,3 +1181,65 @@ def processar_planilhas(id_path, abund_path, top_n=100, progress_callback=None):
         ascending=[False, False, True, False, True]
     ).drop(columns=['Mass Error Abs', 'Has_ID_Priority'])
     return final_df
+
+# -------------------------------
+# EXTERNAL SEARCH (FULL INTEGRATION)
+# -------------------------------
+def buscar_compostos_externos(query):
+    """Pesquisa externa que usa o motor COMPLETO de integração (PubChem + KEGG + ChEBI + ClassyFire + HMDB + Taxonomy)."""
+    if not query or len(query.strip()) < 2: return []
+    query_limpa = query.strip()
+    encoded = quote(query_limpa)
+    
+    # 1. Autocomplete para nomes
+    url_auto = f"https://pubchem.ncbi.nlm.nih.gov/rest/autocomplete/compound/name/{encoded}/json?limit=5"
+    r = safe_request(url_auto)
+    nomes_para_buscar = [query_limpa]
+    if r:
+        try:
+            data = r.json()
+            sugestoes = data.get("dictionary_terms", {}).get("compound", [])
+            if sugestoes:
+                nomes_para_buscar = sugestoes
+        except: pass
+
+    # Se o nome exato digitado não está na lista, adiciona no topo
+    if query_limpa.lower() not in [n.lower() for n in nomes_para_buscar]:
+        nomes_para_buscar.insert(0, query_limpa)
+        nomes_para_buscar = nomes_para_buscar[:5]
+
+    resultados = []
+    seen_cids = set()
+    
+    # 2. Busca paralela usando o motor COMPLETO integrar_composto
+    def buscar_e_integrar(nome):
+        try:
+            info = integrar_composto(nome)
+            if info and info.get('ID'):
+                return info
+        except Exception as e:
+            logging.error(f"Erro na busca externa para '{nome}': {e}")
+        return None
+    
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {pool.submit(buscar_e_integrar, nome): nome for nome in nomes_para_buscar}
+        for f in as_completed(futures):
+            res = f.result()
+            if res and res.get('ID'):
+                cid = res['ID']
+                if cid not in seen_cids:
+                    seen_cids.add(cid)
+                    # Marcar como origem externa e garantir campos de planilha como N/A
+                    res['origem'] = 'pubchem'
+                    res.setdefault('m/z', 0)
+                    res.setdefault('Retention time (min)', 0)
+                    res.setdefault('Fragmentation Score', 0)
+                    res.setdefault('Isotope Similarity', 0)
+                    res.setdefault('Mass Error (ppm)', 0)
+                    res.setdefault('Score', 0)
+                    res.setdefault('Abundancia_Relativa', 0)
+                    res.setdefault('Amostra_Mais_Abundante', 'N/A (Pesquisa externa)')
+                    res.setdefault('Modo_Aquisicao', 'N/A (Pesquisa externa)')
+                    resultados.append(res)
+    
+    return resultados

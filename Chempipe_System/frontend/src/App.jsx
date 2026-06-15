@@ -1,17 +1,18 @@
 import { useState } from 'react';
 import axios from 'axios';
-import { UploadCloud, Beaker, History, ChevronRight, Activity } from 'lucide-react';
+import { History, ChevronRight, LayoutDashboard, ScanLine } from 'lucide-react';
 import UploadView from './components/UploadView';
 import ResultsTable from './components/ResultsTable';
 import HistoryView from './components/HistoryView';
 import LoadingScreen from './components/LoadingScreen';
+import DashboardView from './components/DashboardView';
 
 // Use environment variable or default to localhost
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 axios.defaults.baseURL = API_URL;
 
 function App() {
-  const [currentView, setCurrentView] = useState('upload'); // upload, results, history
+  const [currentView, setCurrentView] = useState('dashboard'); // dashboard, upload, results, history
   const [resultsData, setResultsData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -97,7 +98,7 @@ function App() {
       <header className="glass-panel border-b border-border sticky top-0 z-50 shadow-neon-primary/10">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center px-6 py-4">
           <div className="flex flex-col items-center sm:items-start justify-center">
-            <div className="flex flex-col items-center w-fit group cursor-pointer">
+            <div className="flex flex-col items-center w-fit group cursor-pointer" onClick={() => setCurrentView('dashboard')}>
               <img src="/ChemPipe.png" alt="ChemPipe Logo" className="h-14 w-auto object-contain transition-transform duration-300 group-hover:scale-105" />
               <div className="flex items-center gap-2 mt-1 opacity-80">
                 <span className="w-1.5 h-1.5 rounded-full bg-success"></span>
@@ -109,14 +110,27 @@ function App() {
           {/* Navigation Tabs */}
           <nav className="flex gap-2 p-1.5">
             <button 
-              onClick={() => setCurrentView('upload')}
-              className={`px-6 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-300 ${
-                currentView === 'upload' 
+              onClick={() => setCurrentView('dashboard')}
+              className={`px-6 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-300 flex items-center gap-2 ${
+                currentView === 'dashboard' 
                   ? 'text-white bg-primary shadow-lg shadow-primary/20' 
                   : 'text-text-muted hover:text-white hover:bg-white/5'
               }`}
             >
-              Nova Operação
+              <LayoutDashboard className="w-3.5 h-3.5" />
+              Dashboard
+            </button>
+
+            <button 
+              onClick={() => setCurrentView('upload')}
+              className={`px-6 py-2.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all duration-300 flex items-center gap-2 ${
+                currentView === 'upload' || currentView === 'results'
+                  ? 'text-white bg-primary shadow-lg shadow-primary/20' 
+                  : 'text-text-muted hover:text-white hover:bg-white/5'
+              }`}
+            >
+              <ScanLine className="w-3.5 h-3.5" />
+              Scanner
             </button>
  
             <button 
@@ -145,6 +159,18 @@ function App() {
           />
         ) : (
           <>
+            {currentView === 'dashboard' && (
+              <div className="animate-in fade-in slide-in-from-bottom-8 duration-700">
+                <DashboardView 
+                  onViewResults={(data) => {
+                    setResultsData(data);
+                    setCurrentView('results');
+                  }}
+                  onViewAllLogs={() => setCurrentView('history')}
+                />
+              </div>
+            )}
+
             {currentView === 'upload' && (
               <UploadView onUpload={handleUpload} loading={loading} error={error} />
             )}
@@ -183,3 +209,4 @@ function App() {
 }
 
 export default App;
+

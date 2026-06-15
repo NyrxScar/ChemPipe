@@ -1,0 +1,1 @@
+﻿window.onerror = function(msg, url, lineNo, columnNo, error) { fetch('http://localhost:8000/api/log_error', { method: 'POST', body: JSON.stringify({msg, url, lineNo, columnNo, stack: error ? error.stack : ''}) }); return false; }; console.error = function(...args) { fetch('http://localhost:8000/api/log_error', { method: 'POST', body: JSON.stringify({args}) }); };
